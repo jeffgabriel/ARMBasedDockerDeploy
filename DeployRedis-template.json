@@ -1,0 +1,297 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "redisVMAdminUsername": {
+      "type": "securestring",
+      "defaultValue": "myredisadmin",
+      "metadata": {
+        "description": "User name for redis. normally pass this in as a parameter, preferably from secrets config"
+      }
+    },
+    "redisVMAdminPassword": {
+      "type": "securestring",
+      "defaultValue": "ChangeThis123!",
+      "metadata": {
+        "description": "password name for redis. normally pass this in as a parameter, preferably from secrets config"
+      }
+    },
+    "redisAdminPassword": {
+      "type": "securestring",
+      "defaultValue": "somethingyoushouldchange",
+      "metadata": {
+        "description": "password name for redis. normally pass this in as a parameter, preferably from secrets config"
+      }
+    },
+    "publicSSHKeyData": {
+      "type": "securestring",
+      "defaultValue": "none",
+      "metadata": {
+        "description": "SSH public key to set on linux VM",
+        "comment": "not used in this deployment but would be best practice. normally pass this in as a parameter, preferably from secrets config"
+      }
+    },
+    "redisMachineSize": {
+      "type": "string",
+      "defaultValue": "Standard_DS1_v2",
+      "allowedValues": [
+        "Standard_DS1_v2",
+        "Standard_DS2_v2",
+        "Standard_DS3_v2",
+        "Standard_DS4_v2",
+        "Standard_DS5_v2",
+        "Standard_DS11_v2",
+        "Standard_DS12_v2",
+        "Standard_DS13_v2",
+        "Standard_DS14_v2",
+        "Standard_F1s",
+        "Standard_F2s",
+        "Standard_F4s",
+        "Standard_F8s",
+        "Standard_F16s"
+      ]
+    },
+    "StorageSku": {
+      "type": "object",
+      "defaultValue": {
+        "name": "Premium_LRS",
+        "tier": "Premium"
+      }
+    },
+    "redisIp": {
+      "type": "string",
+      "defaultValue": "10.0.0.10"
+    }
+  },
+  "variables": {
+    "uniquePrefix": "[take(uniqueString(resourceGroup().id),5)]",
+    "redisIPAddressName": "redis-server-pip",
+    "vnet_name": "redis-example-vnet",
+    "subnet_name": "redis-subnet",
+    "deploymentStorageAccountName": "redisstorage",
+    "scriptResourcesBaseUri": "https://raw.githubusercontent.com/jeffgabriel/ARMBasedDockerDeploy/master/resources/",
+    "redisMachineName": "redis-vm",
+    "redisNicName": "redis-nic",
+    "storageName": "[concat(variables('uniquePrefix'),'redisstor')]",
+    "osDiskName": "redisdisk",
+    "LinuxVMPublisher": "Canonical",
+    "LinuxVMOffer": "UbuntuServer",
+    "LinuxVMSku": "16.04.0-LTS",
+    "installredisUrl": "[concat(variables('scriptResourcesBaseUri'),'install-redis.sh')]",
+    "redisServiceUrl": "[concat(variables('scriptResourcesBaseUri'),'docker-redis.service')]",
+    "logrotateUrl": "[concat(variables('scriptResourcesBaseUri'),'logrotation.conf')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "tags": {
+        "displayName": "Public VNet"
+      },
+      "name": "[variables('vnet_name')]",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.0.0.0/24"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnet_name')]",
+            "properties": {
+              "addressPrefix": "10.0.0.0/28"
+            }
+          }
+        ]
+      },
+      "resources": [],
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'PublicNSG')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "PublicNSG",
+      "apiVersion": "2016-03-30",
+      "tags": {
+        "displayName": "Public NSG"
+      },
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "redis-ssh",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "[parameters('redisIp')]",
+              "access": "Allow",
+              "priority": 1040,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      },
+      "resources": [],
+      "dependsOn": []
+    },
+    {
+      "name": "[variables('redisNicName')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[concat('Microsoft.Network/publicIPAddresses/', variables('redisIPAddressName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnet_name'))]"
+      ],
+      "tags": {
+        "displayName": "Redis Server Nic"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses',variables('redisIPAddressName'))]"
+              },
+              "privateIPAddress": "[parameters('redisIp')]",
+              "privateIPAllocationMethod": "Static",
+              "subnet": {
+                "id": "[concat(resourceId('Microsoft.Network/virtualNetworks', variables('vnet_name')), '/subnets/', variables('subnet_name'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[variables('redisIPAddressName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2016-03-30",
+      "tags": {
+        "displayName": "Redis Public IP"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(variables('uniquePrefix'),'-redis')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "sku": "[parameters('StorageSku')]",
+      "kind": "Storage",
+      "name": "[variables('storageName')]",
+      "apiVersion": "2016-01-01",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "Redis VHD Storage"
+      },
+      "properties": {},
+      "resources": [],
+      "dependsOn": []
+    },
+    {
+      "name": "[variables('redisMachineName')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('redisNicName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]"
+      ],
+      "tags": {
+        "displayName": "Redis VM"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('redisMachineSize')]"
+        },
+        "osProfile": {
+          "computerName": "[variables('redisMachineName')]",
+          "adminUsername": "[parameters('redisVMAdminUsername')]",
+          "adminPassword": "[parameters('redisVMAdminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('LinuxVMPublisher')]",
+            "offer": "[variables('LinuxVMOffer')]",
+            "sku": "[variables('LinuxVMSku')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "redis-OSDisk",
+            "vhd": {
+              "uri": "[concat('https://', variables('storageName') , '.blob.core.windows.net',  concat('/vhds/', variables('osDiskName')), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('redisNicName'))]"
+            }
+          ]
+        }
+      },
+      "resources": [
+        {
+          "type": "Microsoft.Compute/virtualMachines/extensions",
+          "name": "[concat(variables('redisMachineName'),'/DockerExtension')]",
+          "tags": {
+            "displayName": "Redis Docker Extension"
+          },
+          "apiVersion": "2015-05-01-preview",
+          "location": "[resourceGroup().location]",
+          "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('redisMachineName'))]"
+          ],
+          "properties": {
+            "publisher": "Microsoft.Azure.Extensions",
+            "type": "DockerExtension",
+            "typeHandlerVersion": "1.0",
+            "autoUpgradeMinorVersion": true,
+            "settings": {}
+          }
+        },
+        {
+          "name": "[concat(variables('redisMachineName'),'/CustomScriptForLinux')]",
+          "type": "Microsoft.Compute/virtualMachines/extensions",
+          "location": "[resourceGroup().location]",
+          "apiVersion": "2015-06-15",
+          "tags": {
+            "displayName": "Redis Custom Linux Script"
+          },
+          "properties": {
+            "publisher": "Microsoft.Azure.Extensions",
+            "type": "CustomScript",
+            "typeHandlerVersion": "2.0",
+            "autoUpgradeMinorVersion": true,
+            "settings": {
+              "fileUris": [
+                "[variables('installredisUrl')]",
+                "[variables('redisServiceUrl')]",
+                "[variables('logrotateUrl')]"
+              ],
+              "commandToExecute": "[concat('sudo ./install-redis.sh ', ' ', parameters('redisAdminPassword'))]"
+            }
+          },
+          "dependsOn": [
+            "[resourceId('Microsoft.Compute/virtualMachines', variables('redisMachineName'))]",
+            "[concat('Microsoft.Compute/virtualMachines/', variables('redisMachineName'),'/extensions/DockerExtension')]"
+          ]
+        }
+
+      ]
+    }
+  ],
+  "outputs": {}
+}
