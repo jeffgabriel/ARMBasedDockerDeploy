@@ -1,0 +1,13 @@
+###Systemd - place in /etc/systemd/system as .service file - run sudo systemctl enable docker-redis###
+[Unit]
+Description=Redis Server Container
+Requires=docker.service
+After=docker.service
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/docker start -a redis
+ExecStop=/usr/bin/docker stop -t 2 redis
+
+[Install]
+WantedBy=default.target
